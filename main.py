@@ -132,7 +132,7 @@ def xg_ratio(att, def_):
 def team_section(label, all_teams: dict):
     st.subheader(label)
     mode = st.radio(
-        "Choosing method", ["From list, "Manual"],
+        "Choosing method", ["From list", "Manual"],
         key=f"{label}_mode", horizontal=True,
     )
     use_list = mode == "From list"
