@@ -48,6 +48,17 @@ STATIC_ELO = {
     "Eswatini": 1148, "Papua New Guinea": 1135, "Singapore": 1134,
     "India": 1128, "Vanuatu": 1118, "Bermuda": 1117, "South Sudan": 1109,
     "Fiji": 1104, "Hong Kong": 1101, "Grenada": 1098,
+    # Ranks 175–209
+    "Andorra": 1080, "Mauritius": 1073, "Chad": 1073, "Belize": 1073,
+    "Solomon Islands": 1054, "Saint Martin": 1042, "Sao Tome and Principe": 1035,
+    "Saint Kitts and Nevis": 1029, "Gibraltar": 1011, "Somaliland": 1005,
+    "Saint Lucia": 1003, "Western Sahara": 996, "Myanmar": 984,
+    "Somalia": 979, "Aruba": 978, "Sint Maarten": 975, "Montserrat": 972,
+    "Afghanistan": 961, "Greenland": 945, "Bangladesh": 942, "Djibouti": 940,
+    "Dominica": 934, "Pakistan": 909, "Monaco": 903, "Barbados": 898,
+    "Antigua and Barbuda": 895, "Liechtenstein": 895, "Nepal": 893,
+    "Cambodia": 871, "Seychelles": 853, "Sri Lanka": 836, "San Marino": 825,
+    "Taiwan": 822, "Bonaire": 817, "Maldives": 801,
 }
 
 # ─── Elo Fetcher ──────────────────────────────────────────────────────────────
