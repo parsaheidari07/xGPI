@@ -1,6 +1,64 @@
 import math
+import requests
 import streamlit as st
 import pandas as pd
+from bs4 import BeautifulSoup
+
+# ─── Elo Fetcher ──────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def fetch_elo_ratings() -> dict:
+    """
+    داده رو از eloratings.net می‌گیره.
+    اول JSON تلاش می‌کنه، بعد HTML scraping.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    # ── روش اول: JSON ─────────────────────────────────────────────────────────
+    try:
+        r = requests.get("https://www.eloratings.net/World.json",
+                         headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            teams = {}
+            entries = data if isinstance(data, list) else data.get("teams", [])
+            for entry in entries:
+                name = entry.get("name") or entry.get("team", "")
+                elo  = int(entry.get("rating") or entry.get("elo", 0))
+                if name and elo:
+                    teams[name] = elo
+            if teams:
+                return teams
+    except Exception:
+        pass
+
+    # ── روش دوم: HTML scraping ────────────────────────────────────────────────
+    try:
+        r = requests.get("https://www.eloratings.net/",
+                         headers=headers, timeout=10)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            teams = {}
+
+            table = soup.find("table", {"id": "tab"})
+            rows  = table.find_all("tr") if table else soup.find_all("tr")
+
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) >= 3:
+                    try:
+                        name = cols[1].get_text(strip=True)
+                        elo  = int(cols[2].get_text(strip=True).replace(",", ""))
+                        if name and elo:
+                            teams[name] = elo
+                    except (ValueError, IndexError):
+                        continue
+            if teams:
+                return teams
+    except Exception:
+        pass
+
+    return {}
 
 # ─── Core Functions ───────────────────────────────────────────────────────────
 
@@ -34,8 +92,8 @@ def predict_probs(xg_a, xg_b, max_goals=10):
 
 def analyze_team(team_elo, matches):
     weights = [elo_weight(team_elo, m["opp_elo"]) for m in matches]
-    xg_att = weighted_average([m["xg_self"] for m in matches], weights)
-    xg_def = weighted_average([m["xg_opp"]  for m in matches], weights)
+    xg_att  = weighted_average([m["xg_self"] for m in matches], weights)
+    xg_def  = weighted_average([m["xg_opp"]  for m in matches], weights)
     return xg_att, xg_def, weights
 
 def xg_ratio(att, def_):
@@ -44,28 +102,69 @@ def xg_ratio(att, def_):
 
 # ─── UI Helpers ───────────────────────────────────────────────────────────────
 
-def team_section(label):
+def team_section(label, all_teams: dict):
     st.subheader(label)
-    name    = st.text_input("Team Name", key=f"{label}_name")
-    elo     = st.number_input("Elo Rating", min_value=0, value=1500,
-                              step=10, key=f"{label}_elo")
+
+    # انتخاب حالت
+    mode = st.radio(
+        "روش انتخاب تیم",
+        ["از لیست", "دستی"],
+        key=f"{label}_mode",
+        horizontal=True,
+    )
+
+    use_list = mode == "از لیست" and bool(all_teams)
+
+    if use_list:
+        team_names = sorted(all_teams.keys())
+        selected   = st.selectbox("انتخاب تیم", team_names, key=f"{label}_select")
+        name       = selected
+        elo        = all_teams[selected]
+        st.info(f"Elo Rating: **{elo}**")
+    else:
+        name = st.text_input("Team Name", key=f"{label}_name")
+        elo  = st.number_input("Elo Rating", min_value=0, value=1500,
+                               step=10, key=f"{label}_elo")
+
     st.markdown("**Last 5 Matches**")
-    matches = []
+    opp_names = sorted(all_teams.keys()) if use_list else []
+    matches   = []
+
     for i in range(5):
         c1, c2, c3 = st.columns(3)
+
         with c1:
-            opp_elo  = st.number_input(f"M{i+1} — Opponent Elo",
-                                       min_value=0, value=1500,
-                                       step=10, key=f"{label}_opp_elo_{i}")
+            if use_list:
+                opp_sel = st.selectbox(
+                    f"M{i+1} — حریف",
+                    opp_names,
+                    key=f"{label}_opp_sel_{i}",
+                )
+                opp_elo = all_teams[opp_sel]
+                st.caption(f"Elo: {opp_elo}")
+            else:
+                opp_elo = st.number_input(
+                    f"M{i+1} — Opponent Elo",
+                    min_value=0, value=1500,
+                    step=10, key=f"{label}_opp_elo_{i}",
+                )
+
         with c2:
-            xg_self  = st.number_input(f"M{i+1} — Your xG",
-                                       min_value=0.0, value=1.2,
-                                       step=0.1, key=f"{label}_xg_self_{i}")
+            xg_self = st.number_input(
+                f"M{i+1} — Your xG",
+                min_value=0.0, value=1.2,
+                step=0.1, key=f"{label}_xg_self_{i}",
+            )
+
         with c3:
-            xg_opp   = st.number_input(f"M{i+1} — Opponent xG",
-                                       min_value=0.0, value=1.0,
-                                       step=0.1, key=f"{label}_xg_opp_{i}")
+            xg_opp = st.number_input(
+                f"M{i+1} — Opponent xG",
+                min_value=0.0, value=1.0,
+                step=0.1, key=f"{label}_xg_opp_{i}",
+            )
+
         matches.append({"opp_elo": opp_elo, "xg_self": xg_self, "xg_opp": xg_opp})
+
     return name, elo, matches
 
 # ─── App ──────────────────────────────────────────────────────────────────────
@@ -73,11 +172,18 @@ def team_section(label):
 st.set_page_config(page_title="xG Power Index", layout="wide")
 st.title("xG Power Index — Team Comparison")
 
+# بارگذاری لیست تیم‌ها
+with st.spinner("در حال دریافت رتبه‌بندی Elo..."):
+    all_teams = fetch_elo_ratings()
+
+if not all_teams:
+    st.warning("لیست تیم‌ها بارگذاری نشد — از حالت دستی استفاده کنید.")
+
 col_a, col_b = st.columns(2)
 with col_a:
-    name_a, elo_a, matches_a = team_section("Team A")
+    name_a, elo_a, matches_a = team_section("Team A", all_teams)
 with col_b:
-    name_b, elo_b, matches_b = team_section("Team B")
+    name_b, elo_b, matches_b = team_section("Team B", all_teams)
 
 label_a = name_a or "Team A"
 label_b = name_b or "Team B"
@@ -99,15 +205,15 @@ if st.button("Analyze & Predict"):
 
     with s1:
         st.markdown(f"**{label_a}**")
-        st.metric("Attacking xG",           f"{xg_att_a:.3f}")
+        st.metric("Attacking xG",            f"{xg_att_a:.3f}")
         st.metric("Defensive xG (conceded)", f"{xg_def_a:.3f}")
-        st.metric("xG Ratio",               xg_ratio(xg_att_a, xg_def_a))
+        st.metric("xG Ratio",                xg_ratio(xg_att_a, xg_def_a))
 
     with s2:
         st.markdown(f"**{label_b}**")
-        st.metric("Attacking xG",           f"{xg_att_b:.3f}")
+        st.metric("Attacking xG",            f"{xg_att_b:.3f}")
         st.metric("Defensive xG (conceded)", f"{xg_def_b:.3f}")
-        st.metric("xG Ratio",               xg_ratio(xg_att_b, xg_def_b))
+        st.metric("xG Ratio",                xg_ratio(xg_att_b, xg_def_b))
 
     # ── Match Prediction ──────────────────────────────────────────────────────
     st.markdown("---")
@@ -135,7 +241,7 @@ if st.button("Analyze & Predict"):
     st.markdown("---")
     st.subheader("Match Weights")
     w1, w2 = st.columns(2)
-    index = [f"M{i+1}" for i in range(5)]
+    index  = [f"M{i+1}" for i in range(5)]
 
     with w1:
         st.markdown(f"**{label_a}**")
