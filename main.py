@@ -132,14 +132,14 @@ def xg_ratio(att, def_):
 def team_section(label, all_teams: dict):
     st.subheader(label)
     mode = st.radio(
-        "روش انتخاب تیم", ["از لیست", "دستی"],
+        "Choosing method", ["From list, "Manual"],
         key=f"{label}_mode", horizontal=True,
     )
-    use_list = mode == "از لیست"
+    use_list = mode == "From list"
 
     if use_list:
         team_names = sorted(all_teams.keys())
-        selected   = st.selectbox("انتخاب تیم", team_names, key=f"{label}_select")
+        selected   = st.selectbox("Choose team", team_names, key=f"{label}_select")
         name       = selected
         elo        = all_teams[selected]
         st.info(f"Elo Rating: **{elo}**")
