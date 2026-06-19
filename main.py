@@ -2,8 +2,6 @@ import math
 import streamlit as st
 import pandas as pd
 
-# ─── Static Elo Data (fallback) ───────────────────────────────────────────────
-
 STATIC_ELO = {
     "Spain": 2157, "Argentina": 2115, "France": 2063, "England": 2024,
     "Portugal": 1989, "Colombia": 1982, "Brazil": 1978, "Netherlands": 1944,
@@ -48,7 +46,6 @@ STATIC_ELO = {
     "Eswatini": 1148, "Papua New Guinea": 1135, "Singapore": 1134,
     "India": 1128, "Vanuatu": 1118, "Bermuda": 1117, "South Sudan": 1109,
     "Fiji": 1104, "Hong Kong": 1101, "Grenada": 1098,
-    # Ranks 175–209
     "Andorra": 1080, "Mauritius": 1073, "Chad": 1073, "Belize": 1073,
     "Solomon Islands": 1054, "Saint Martin": 1042, "Sao Tome and Principe": 1035,
     "Saint Kitts and Nevis": 1029, "Gibraltar": 1011, "Somaliland": 1005,
@@ -61,16 +58,12 @@ STATIC_ELO = {
     "Taiwan": 822, "Bonaire": 817, "Maldives": 801,
 }
 
-# ─── Elo Fetcher ──────────────────────────────────────────────────────────────
-
 @st.cache_data(ttl=3600)
 def fetch_elo_ratings() -> dict:
     try:
         import requests
-        from bs4 import BeautifulSoup
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get("https://www.eloratings.net/World.json",
-                         headers=headers, timeout=10)
+        r = requests.get("https://www.eloratings.net/World.json", headers=headers, timeout=10)
         if r.status_code == 200:
             data = r.json()
             entries = data if isinstance(data, list) else data.get("teams", [])
@@ -84,20 +77,7 @@ def fetch_elo_ratings() -> dict:
                 return teams
     except Exception:
         pass
-    # fallback به داده استاتیک
     return STATIC_ELO
-
-# ─── Core Functions ───────────────────────────────────────────────────────────
-
-def elo_weight(team_elo, opponent_elo):
-    diff = opponent_elo - team_elo
-    return 1 / (1 + math.exp(-diff / 400))
-
-def weighted_average(values, weights):
-    total = sum(weights)
-    if total == 0:
-        return 0.0
-    return sum(v * w for v, w in zip(values, weights)) / total
 
 def poisson_prob(lam, k):
     if lam <= 0:
@@ -118,16 +98,27 @@ def predict_probs(xg_a, xg_b, max_goals=10):
     return p_win, p_draw, p_loss
 
 def analyze_team(team_elo, matches):
-    weights = [elo_weight(team_elo, m["opp_elo"]) for m in matches]
-    xg_att  = weighted_average([m["xg_self"] for m in matches], weights)
-    xg_def  = weighted_average([m["xg_opp"]  for m in matches], weights)
+    adjusted_atts = []
+    adjusted_defs = []
+    weights = []
+    
+    for m in matches:
+        diff_factor = math.exp((m["opp_elo"] - team_elo) / 400)
+        adj_att = m["xg_self"] * diff_factor
+        adj_def = m["xg_opp"] / diff_factor
+        
+        adjusted_atts.append(adj_att)
+        adjusted_defs.append(adj_def)
+        weights.append(diff_factor)
+        
+    xg_att = sum(adjusted_atts) / len(matches) if matches else 0.0
+    xg_def = sum(adjusted_defs) / len(matches) if matches else 0.0
+    
     return xg_att, xg_def, weights
 
 def xg_ratio(att, def_):
     total = att + def_
     return f"{att / total:.3f}" if total > 0 else "N/A"
-
-# ─── UI Helpers ───────────────────────────────────────────────────────────────
 
 def team_section(label, all_teams: dict):
     st.subheader(label)
@@ -182,8 +173,6 @@ def team_section(label, all_teams: dict):
 
     return name, elo, matches
 
-# ─── App ──────────────────────────────────────────────────────────────────────
-
 st.set_page_config(page_title="xG Power Index", layout="wide")
 st.title("xG Power Index — Team Comparison")
 
@@ -211,18 +200,18 @@ if st.button("Analyze & Predict"):
     p_win, p_draw, p_loss = predict_probs(expected_a, expected_b)
 
     st.markdown("---")
-    st.subheader("Team Stats")
+    st.subheader("Team Stats (Elo-Adjusted)")
     s1, s2 = st.columns(2)
     with s1:
         st.markdown(f"**{label_a}**")
-        st.metric("Attacking xG",            f"{xg_att_a:.3f}")
-        st.metric("Defensive xG (conceded)", f"{xg_def_a:.3f}")
-        st.metric("xG Ratio",                xg_ratio(xg_att_a, xg_def_a))
+        st.metric("Adjusted Attacking xG",            f"{xg_att_a:.3f}")
+        st.metric("Adjusted Defensive xG (conceded)", f"{xg_def_a:.3f}")
+        st.metric("xG Ratio",                               xg_ratio(xg_att_a, xg_def_a))
     with s2:
         st.markdown(f"**{label_b}**")
-        st.metric("Attacking xG",            f"{xg_att_b:.3f}")
-        st.metric("Defensive xG (conceded)", f"{xg_def_b:.3f}")
-        st.metric("xG Ratio",                xg_ratio(xg_att_b, xg_def_b))
+        st.metric("Adjusted Attacking xG",            f"{xg_att_b:.3f}")
+        st.metric("Adjusted Defensive xG (conceded)", f"{xg_def_b:.3f}")
+        st.metric("xG Ratio",                               xg_ratio(xg_att_b, xg_def_b))
 
     st.markdown("---")
     st.subheader("Match Prediction")
@@ -239,18 +228,18 @@ if st.button("Analyze & Predict"):
         st.info("Prediction: Match is likely to be a **Draw**.")
 
     st.markdown("---")
-    st.subheader("Expected Goals (Adjusted)")
+    st.subheader("Expected Goals for Upcoming Match")
     e1, e2 = st.columns(2)
-    e1.metric(f"{label_a} Expected xG", f"{expected_a:.3f}")
-    e2.metric(f"{label_b} Expected xG", f"{expected_b:.3f}")
+    e1.metric(f"{label_a} Expected goals", f"{expected_a:.3f}")
+    e2.metric(f"{label_b} Expected goals", f"{expected_b:.3f}")
 
     st.markdown("---")
-    st.subheader("Match Weights")
+    st.subheader("Match Difficulty & Weight Factors")
     w1, w2 = st.columns(2)
     index  = [f"M{i+1}" for i in range(5)]
     with w1:
-        st.markdown(f"**{label_a}**")
-        st.bar_chart(pd.DataFrame({"Weight": weights_a}, index=index))
+        st.markdown(f"**{label_a}** (Higher means tougher opponent)")
+        st.bar_chart(pd.DataFrame({"Difficulty Weight": weights_a}, index=index))
     with w2:
-        st.markdown(f"**{label_b}**")
-        st.bar_chart(pd.DataFrame({"Weight": weights_b}, index=index))
+        st.markdown(f"**{label_b}** (Higher means tougher opponent)")
+        st.bar_chart(pd.DataFrame({"Difficulty Weight": weights_b}, index=index))
