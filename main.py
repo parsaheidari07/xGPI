@@ -78,49 +78,58 @@ def predict_probs(xg_a: float, xg_b: float, max_goals: int = 10):
     return p_win, p_draw, p_loss
 
 
-def analyze_team(team_elo: int, matches: list):
+def analyze_team(team_elo: int, matches: list, days_decay: float = 0.05):
     """
-    Weighted average of raw xG values.
-    Weight = diff_factor = exp((opp_elo - team_elo) / 400)
+    میانگین وزن‌دار xG با در نظر گرفتن قدرت حریف و زمان بازی.
     
-    Tougher opponents (higher opp_elo) get more weight because
-    performance against stronger sides is more informative.
-    The adjustment is applied ONLY through the weight, not to
-    the xG values themselves, to avoid double-counting.
+    وزن = exp((opp_elo - team_elo) / 400) × exp(-days_decay × days_ago)
+    
+    حریف قوی‌تر و بازی‌های اخیر وزن بیشتری دارند.
     """
     if not matches:
         return 0.0, 0.0, []
 
     weights = []
     for m in matches:
-        # diff_factor > 1 means opponent was stronger, < 1 means weaker
         diff_factor = math.exp((m["opp_elo"] - team_elo) / 400)
-        weights.append(diff_factor)
+        time_factor = math.exp(-days_decay * m.get("days_ago", 0))
+        weights.append(diff_factor * time_factor)
 
     total_w = sum(weights)
+    if total_w == 0:
+        return 0.0, 0.0, weights
 
-    # Weighted average of raw xG — difficulty only acts as weight
-    xg_att = sum(m["xg_self"] * w for m, w in zip(matches, weights)) / total_w
-    xg_def = sum(m["xg_opp"]  * w for m, w in zip(matches, weights)) / total_w
+    # نرمال‌سازی وزن‌ها
+    normalized_weights = [w / total_w for w in weights]
+
+    # میانگین وزن‌دار
+    xg_att = sum(m["xg_self"] * w for m, w in zip(matches, normalized_weights))
+    xg_def = sum(m["xg_opp"] * w for m, w in zip(matches, normalized_weights))
 
     return xg_att, xg_def, weights
 
 
-def combine_xg(xg_att: float, xg_def_opp: float) -> float:
+def elo_baseline_xg(elo: int) -> float:
     """
-    Geometric mean of a team's attacking xG and the opponent's
-    defensive xG (goals conceded). Geometric mean is more appropriate
-    here than arithmetic because both inputs are rates and we want
-    to avoid one extreme value dominating the result.
-    Falls back to arithmetic mean if either value is non-positive.
+    تأثیر مستقیم Elo در xG پایه.
+    تیم‌های قوی‌تر xG پایه بالاتری دارند.
     """
-    if xg_att > 0 and xg_def_opp > 0:
-        return math.sqrt(xg_att * xg_def_opp)
-    return (xg_att + xg_def_opp) / 2
+    return 1.0 + 0.0005 * (elo - 1500)
+
+
+def combine_xg(xg_att: float, xg_def_opp: float, alpha: float = 0.65) -> float:
+    """
+    ترکیب وزن‌دار xG حمله و دفاع حریف.
+    
+    alpha = 0.65 یعنی ۶۵٪ وزن به xG حمله‌ای و ۳۵٪ به ضعف دفاعی حریف.
+    """
+    if xg_att <= 0 or xg_def_opp <= 0:
+        return (xg_att + xg_def_opp) / 2
+    return alpha * xg_att + (1 - alpha) * xg_def_opp
 
 
 def xg_dominance(att: float, def_: float) -> str:
-    """Attack / Defense ratio. > 1 means team creates more than it concedes."""
+    """نسبت حمله به دفاع. > 1 یعنی تیم بیشتر می‌سازد تا از دست می‌دهد."""
     return f"{att / def_:.3f}" if def_ > 0 else "N/A"
 
 
@@ -128,35 +137,35 @@ def team_section(label: str, all_teams: dict):
     st.subheader(label)
 
     mode = st.radio(
-        "Choosing method",
-        ["From list", "Manual"],
+        "روش انتخاب",
+        ["از لیست", "دستی"],
         key=f"{label}_mode",
         horizontal=True,
     )
-    use_list = mode == "From list"
+    use_list = mode == "از لیست"
 
     if use_list:
         team_names = sorted(all_teams.keys())
-        selected = st.selectbox("Choose team", team_names, key=f"{label}_select")
+        selected = st.selectbox("انتخاب تیم", team_names, key=f"{label}_select")
         name = selected
         elo = all_teams[selected]
-        st.info(f"Elo Rating: **{elo}**")
+        st.info(f"رتبه Elo: **{elo}**")
     else:
-        name = st.text_input("Team Name", key=f"{label}_name")
+        name = st.text_input("نام تیم", key=f"{label}_name")
         elo = st.number_input(
-            "Elo Rating", min_value=0, value=1500, step=10, key=f"{label}_elo"
+            "رتبه Elo", min_value=0, value=1500, step=10, key=f"{label}_elo"
         )
 
-    st.markdown("**Last 5 Matches**")
+    st.markdown("**۵ بازی آخر**")
     opp_names = sorted(all_teams.keys())
     matches = []
 
     for i in range(5):
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
             if use_list:
                 opp_sel = st.selectbox(
-                    f"M{i+1} — Opponent",
+                    f"بازی {i+1} — حریف",
                     opp_names,
                     key=f"{label}_opp_sel_{i}",
                 )
@@ -164,7 +173,7 @@ def team_section(label: str, all_teams: dict):
                 st.caption(f"Elo: {opp_elo}")
             else:
                 opp_elo = st.number_input(
-                    f"M{i+1} — Opponent Elo",
+                    f"بازی {i+1} — Elo حریف",
                     min_value=0,
                     value=1500,
                     step=10,
@@ -172,7 +181,7 @@ def team_section(label: str, all_teams: dict):
                 )
         with c2:
             xg_self = st.number_input(
-                f"M{i+1} — Your xG",
+                f"بازی {i+1} — xG شما",
                 min_value=0.0,
                 value=1.2,
                 step=0.1,
@@ -180,99 +189,121 @@ def team_section(label: str, all_teams: dict):
             )
         with c3:
             xg_opp = st.number_input(
-                f"M{i+1} — Opponent xG",
+                f"بازی {i+1} — xG حریف",
                 min_value=0.0,
                 value=1.0,
                 step=0.1,
                 key=f"{label}_xg_opp_{i}",
             )
-        matches.append({"opp_elo": opp_elo, "xg_self": xg_self, "xg_opp": xg_opp})
+        with c4:
+            days_ago = st.number_input(
+                f"بازی {i+1} — چند روز پیش",
+                min_value=0,
+                value=i * 7,
+                step=1,
+                key=f"{label}_days_{i}",
+            )
+        matches.append({
+            "opp_elo": opp_elo,
+            "xg_self": xg_self,
+            "xg_opp": xg_opp,
+            "days_ago": days_ago
+        })
 
     return name, elo, matches
 
 
-# ── App layout ────────────────────────────────────────────────────────────────
+# ── لایه اصلی اپلیکیشن ────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="xG Power Index", layout="wide")
-st.title("xG Power Index — Team Comparison")
+st.title("xG Power Index — مقایسه تیم‌ها")
 
-with st.spinner("Loading Elo ratings..."):
+with st.spinner("در حال بارگذاری رتبه‌های Elo..."):
     all_teams, source = fetch_elo_ratings()
 
 if source == "live":
-    st.caption(f"Elo data source: **Live API** — {len(all_teams)} teams loaded")
+    st.caption(f"منبع داده Elo: **API زنده** — {len(all_teams)} تیم بارگذاری شد")
 else:
-    st.caption("Elo data source: **Fallback Mode** (connection failed)")
+    st.caption("منبع داده Elo: **حالت پشتیبان** (اتصال ناموفق)")
 
 col_a, col_b = st.columns(2)
 with col_a:
-    name_a, elo_a, matches_a = team_section("Team A", all_teams)
+    name_a, elo_a, matches_a = team_section("تیم A", all_teams)
 with col_b:
-    name_b, elo_b, matches_b = team_section("Team B", all_teams)
+    name_b, elo_b, matches_b = team_section("تیم B", all_teams)
 
-label_a = name_a or "Team A"
-label_b = name_b or "Team B"
+label_a = name_a or "تیم A"
+label_b = name_b or "تیم B"
 
-if st.button("Analyze & Predict", type="primary"):
+if st.button("تحلیل و پیش‌بینی", type="primary"):
     xg_att_a, xg_def_a, weights_a = analyze_team(elo_a, matches_a)
     xg_att_b, xg_def_b, weights_b = analyze_team(elo_b, matches_b)
 
-    # Expected goals for the upcoming match:
-    # Team A's attack vs Team B's defensive weakness (and vice-versa)
-    expected_a = combine_xg(xg_att_a, xg_def_b)
-    expected_b = combine_xg(xg_att_b, xg_def_a)
+    # xG پایه بر اساس Elo
+    baseline_a = elo_baseline_xg(elo_a)
+    baseline_b = elo_baseline_xg(elo_b)
+
+    # ترکیب xG پایه با xG محاسبه‌شده
+    xg_att_a_adjusted = 0.7 * xg_att_a + 0.3 * baseline_a
+    xg_att_b_adjusted = 0.7 * xg_att_b + 0.3 * baseline_b
+
+    # xG مورد انتظار برای بازی آینده
+    expected_a = combine_xg(xg_att_a_adjusted, xg_def_b)
+    expected_b = combine_xg(xg_att_b_adjusted, xg_def_a)
 
     p_win, p_draw, p_loss = predict_probs(expected_a, expected_b)
 
-    # ── Team stats ────────────────────────────────────────────────────────────
+    # ── آمار تیم‌ها ───────────────────────────────────────────────────────────
     st.markdown("---")
-    st.subheader("Team Stats (Elo-Adjusted)")
+    st.subheader("آمار تیم‌ها (تنظیم‌شده با Elo)")
     s1, s2 = st.columns(2)
     with s1:
         st.markdown(f"**{label_a}**")
-        st.metric("Attacking xG (weighted avg)",      f"{xg_att_a:.3f}")
-        st.metric("Defensive xG conceded (weighted)", f"{xg_def_a:.3f}")
-        st.metric("xG Dominance (att / def)",         xg_dominance(xg_att_a, xg_def_a))
+        st.metric("xG حمله‌ای (میانگین وزن‌دار)", f"{xg_att_a_adjusted:.3f}")
+        st.metric("xG دفاعی خورده (میانگین وزن‌دار)", f"{xg_def_a:.3f}")
+        st.metric("تسلط xG (حمله / دفاع)", xg_dominance(xg_att_a_adjusted, xg_def_a))
+        st.caption(f"xG پایه از Elo: {baseline_a:.3f}")
     with s2:
         st.markdown(f"**{label_b}**")
-        st.metric("Attacking xG (weighted avg)",      f"{xg_att_b:.3f}")
-        st.metric("Defensive xG conceded (weighted)", f"{xg_def_b:.3f}")
-        st.metric("xG Dominance (att / def)",         xg_dominance(xg_att_b, xg_def_b))
+        st.metric("xG حمله‌ای (میانگین وزن‌دار)", f"{xg_att_b_adjusted:.3f}")
+        st.metric("xG دفاعی خورده (میانگین وزن‌دار)", f"{xg_def_b:.3f}")
+        st.metric("تسلط xG (حمله / دفاع)", xg_dominance(xg_att_b_adjusted, xg_def_b))
+        st.caption(f"xG پایه از Elo: {baseline_b:.3f}")
 
-    # ── Match prediction ──────────────────────────────────────────────────────
+    # ── پیش‌بینی بازی ─────────────────────────────────────────────────────────
     st.markdown("---")
-    st.subheader("Match Prediction")
+    st.subheader("پیش‌بینی بازی")
     p1, p2, p3 = st.columns(3)
-    p1.metric(f"{label_a} Win", f"{p_win  * 100:.1f}%")
-    p2.metric("Draw",           f"{p_draw * 100:.1f}%")
-    p3.metric(f"{label_b} Win", f"{p_loss * 100:.1f}%")
+    p1.metric(f"برد {label_a}", f"{p_win * 100:.1f}%")
+    p2.metric("مساوی", f"{p_draw * 100:.1f}%")
+    p3.metric(f"برد {label_b}", f"{p_loss * 100:.1f}%")
 
     if p_win > p_loss and p_win > p_draw:
-        st.success(f"Prediction: **{label_a}** is favored to win.")
+        st.success(f"پیش‌بینی: **{label_a}** برنده احتمالی است.")
     elif p_loss > p_win and p_loss > p_draw:
-        st.success(f"Prediction: **{label_b}** is favored to win.")
+        st.success(f"پیش‌بینی: **{label_b}** برنده احتمالی است.")
     else:
-        st.info("Prediction: Match is likely to be a **Draw**.")
+        st.info("پیش‌بینی: احتمال **مساوی** زیاد است.")
 
-    # ── Expected goals ────────────────────────────────────────────────────────
+    # ── گل‌های مورد انتظار ────────────────────────────────────────────────────
     st.markdown("---")
-    st.subheader("Expected Goals for Upcoming Match")
+    st.subheader("گل‌های مورد انتظار برای بازی آینده")
     e1, e2 = st.columns(2)
-    e1.metric(f"{label_a} Expected Goals", f"{expected_a:.3f}")
-    e2.metric(f"{label_b} Expected Goals", f"{expected_b:.3f}")
+    e1.metric(f"گل مورد انتظار {label_a}", f"{expected_a:.3f}")
+    e2.metric(f"گل مورد انتظار {label_b}", f"{expected_b:.3f}")
 
-    # ── Difficulty weights ────────────────────────────────────────────────────
+    # ── وزن‌های دشواری ────────────────────────────────────────────────────────
     st.markdown("---")
-    st.subheader("Match Difficulty & Weight Factors")
+    st.subheader("دشواری بازی‌ها و ضرایب وزن")
     st.caption(
-        "Weight = exp((opp_elo − team_elo) / 400). "
-        "Values > 1 mean the opponent was stronger than your team."
+        "وزن = exp((opp_elo − team_elo) / 400) × exp(-0.05 × days_ago). "
+        "مقادیر > 1 یعنی حریف قوی‌تر بود."
     )
     w1, w2 = st.columns(2)
-    index = [f"M{i+1}" for i in range(5)]
+    index = [f"بازی {i+1}" for i in range(5)]
     with w1:
-        st.markdown(f"**{label_a}** — higher = tougher opponent")
-        st.bar_chart(pd.DataFrame({"Difficulty Weight": weights_a}, index=index))
+        st.markdown(f"**{label_a}** — بالاتر = حریف سخت‌تر")
+        st.bar_chart(pd.DataFrame({"ضریب دشواری": weights_a}, index=index))
     with w2:
-        st.markdown(f"**{label_b}** — higher = tougher opponent")
-        st.bar_chart(pd.DataFrame({"Difficulty Weight": weights_b}, index=index))
+        st.markdown(f"**{label_b}** — بالاتر = حریف سخت‌تر")
+        st.bar_chart(pd.DataFrame({"ضریب دشواری": weights_b}, index=index))
