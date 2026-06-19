@@ -2,12 +2,41 @@ import math
 import streamlit as st
 import pandas as pd
 
+UPDATED_ELO = {
+    "Spain": 2129, "Argentina": 2128, "France": 2084, "England": 2055,
+    "Colombia": 1998, "Brazil": 1978, "Portugal": 1967, "Netherlands": 1944,
+    "Germany": 1939, "Norway": 1929, "Japan": 1910, "Mexico": 1896,
+    "Ecuador": 1890, "Switzerland": 1885, "Croatia": 1881, "Belgium": 1879,
+    "Uruguay": 1870, "Denmark": 1869, "Italy": 1869, "Austria": 1857,
+    "Turkey": 1849, "Morocco": 1840, "Australia": 1839, "Senegal": 1839,
+    "Scotland": 1794, "Paraguay": 1780, "Ukraine": 1780, "United States": 1780,
+    "Canada": 1777, "Russia": 1772, "South Korea": 1771, "Nigeria": 1767,
+    "Algeria": 1759, "Iran": 1756, "Sweden": 1755, "Greece": 1744,
+    "Ivory Coast": 1743, "Serbia": 1734, "Venezuela": 1733, "Chile": 1717,
+    "Kosovo": 1715, "Egypt": 1711, "Hungary": 1710, "Poland": 1710,
+    "Peru": 1699, "Ireland": 1699, "Uzbekistan": 1698, "Czechia": 1696,
+    "Panama": 1683, "Wales": 1682, "Slovenia": 1682, "DR Congo": 1674,
+    "Slovakia": 1667, "Georgia": 1654, "Jordan": 1653, "Israel": 1647,
+    "Romania": 1639, "Bolivia": 1621, "Albania": 1616, "Cameroon": 1614,
+    "Costa Rica": 1608, "Northern Ireland": 1606, "Cape Verde": 1606, "Saudi Arabia": 1598,
+    "Bosnia and Herzegovina": 1596, "Iraq": 1592, "North Macedonia": 1589, "Mali": 1588,
+    "Tunisia": 1585, "New Zealand": 1578, "Honduras": 1570, "Iceland": 1568,
+    "Ghana": 1557, "Angola": 1542, "United Arab Emirates": 1540, "Finland": 1536,
+    "Haiti": 1536, "Burkina Faso": 1529, "South Africa": 1527, "Jamaica": 1527,
+    "Belarus": 1522, "Guatemala": 1504, "Syria": 1479, "Oman": 1479,
+    "Palestine": 1465, "Guinea": 1463, "Montenegro": 1461, "Bulgaria": 1458,
+    "Luxembourg": 1450, "Northern Cyprus": 1442, "Qatar": 1437, "Suriname": 1431,
+    "Kazakhstan": 1428, "Curaçao": 1427, "China": 1424, "Kurdistan": 1424,
+    "Libya": 1420, "Gambia": 1419, "Bahrain": 1414, "Benin": 1405,
+    "Gabon": 1401, "Uganda": 1394, "Trinidad and Tobago": 1386
+}
+
 @st.cache_data(ttl=3600)
 def fetch_elo_ratings() -> dict:
     try:
         import requests
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get("https://www.eloratings.net/World.json", headers=headers, timeout=10)
+        r = requests.get("https://www.eloratings.net/World.json", headers=headers, timeout=5)
         if r.status_code == 200:
             data = r.json()
             entries = data if isinstance(data, list) else data.get("teams", [])
@@ -18,10 +47,10 @@ def fetch_elo_ratings() -> dict:
                 if name and elo:
                     teams[name] = elo
             if teams:
-                return teams
+                return teams, "live"
     except Exception:
         pass
-    return {}
+    return UPDATED_ELO, "fallback"
 
 def poisson_prob(lam, k):
     if lam <= 0:
@@ -67,15 +96,11 @@ def xg_ratio(att, def_):
 def team_section(label, all_teams: dict):
     st.subheader(label)
     
-    if all_teams:
-        mode = st.radio(
-            "Choosing method", ["From list", "Manual"],
-            key=f"{label}_mode", horizontal=True,
-        )
-        use_list = mode == "From list"
-    else:
-        use_list = False
-        st.warning("No live Elo data loaded. Manual input required.")
+    mode = st.radio(
+        "Choosing method", ["From list", "Manual"],
+        key=f"{label}_mode", horizontal=True,
+    )
+    use_list = mode == "From list"
 
     if use_list:
         team_names = sorted(all_teams.keys())
@@ -89,7 +114,7 @@ def team_section(label, all_teams: dict):
                                step=10, key=f"{label}_elo")
 
     st.markdown("**Last 5 Matches**")
-    opp_names = sorted(all_teams.keys()) if use_list else []
+    opp_names = sorted(all_teams.keys())
     matches   = []
 
     for i in range(5):
@@ -126,12 +151,12 @@ st.set_page_config(page_title="xG Power Index", layout="wide")
 st.title("xG Power Index — Team Comparison")
 
 with st.spinner("در حال بارگذاری رتبه‌بندی Elo..."):
-    all_teams = fetch_elo_ratings()
+    all_teams, source = fetch_elo_ratings()
 
-if all_teams:
-    st.caption(f"Elo data source: **live** — {len(all_teams)} teams loaded")
+if source == "live":
+    st.caption(f"Elo data source: **Live API** — {len(all_teams)} teams loaded")
 else:
-    st.caption("Elo data source: **failed to load**")
+    st.caption("Elo data source: **Fallback Mode** (Connection failed)")
 
 col_a, col_b = st.columns(2)
 with col_a:
