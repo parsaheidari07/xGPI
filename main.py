@@ -110,22 +110,13 @@ def analyze_team(team_elo: int, matches: list, recency_decay: float = 0.15):
 
 
 def elo_baseline_xg(elo: int) -> float:
-    """
-    Direct Elo influence on baseline xG.
-    Stronger teams have higher baseline xG.
-    """
-    return 1.0 + 0.0005 * (elo - 1500)
+    return 1.0 * math.exp(0.0007 * (elo - 1500))
 
 
-def combine_xg(xg_att: float, xg_def_opp: float, alpha: float = 0.65) -> float:
-    """
-    Weighted combination of attack xG and opponent defensive xG.
-    
-    alpha = 0.65 means 65% weight to attack xG, 35% to opponent defensive weakness.
-    """
-    if xg_att <= 0 or xg_def_opp <= 0:
-        return (xg_att + xg_def_opp) / 2
-    return alpha * xg_att + (1 - alpha) * xg_def_opp
+def combine_xg(xg_att_a, xg_def_a, xg_att_b, xg_def_b, avg_xg=1.2):
+    expected_a = avg_xg * (xg_att_a / avg_xg) * (xg_def_b / avg_xg)
+    expected_b = avg_xg * (xg_att_b / avg_xg) * (xg_def_a / avg_xg)
+    return expected_a, expected_b
 
 
 def xg_dominance(att: float, def_: float) -> str:
